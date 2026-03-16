@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Ident};
+use syn::{parse_macro_input, Data::Struct, DeriveInput, Fields::Named, Ident};
 
 #[proc_macro_derive(Builder)]
 pub fn derive(input: TokenStream) -> TokenStream {
@@ -8,54 +8,84 @@ pub fn derive(input: TokenStream) -> TokenStream {
     // eprintln!("{:#?}", input_ast);
     // TokenStream::new()
 
-    let name = input_ast.ident; // Builder
+    let name = &input_ast.ident; // Builder
     let bname = format!("{}Builder", name);
     let bident = Ident::new(&bname, name.span()); // CommandBuilder
+    let fields = match &input_ast.data {
+        Struct(fields_named) => match &fields_named.fields {
+            Named(fields_named) => {
+                // eprintln!("{:#?}", &fields_named.named);
+                &fields_named.named
+            }
+            _ => {
+                return syn::Error::new_spanned(&input_ast, "Only named fields supported")
+                    .to_compile_error()
+                    .into();
+            }
+        },
+        _ => {
+            return syn::Error::new_spanned(&input_ast, "Only structs supported")
+                .to_compile_error()
+                .into();
+        }
+    };
 
+    let build_fields = fields.iter().map(|f| {
+        let fname = &f.ident;
+        let err = format!("should set {}", fname.as_ref().unwrap());
+        quote! {
+            #fname: self.#fname.clone().ok_or(#err)?
+        }
+    });
+    let builder_init_fields = fields.iter().map(|f| {
+        let fname = &f.ident;
+        quote! {
+            #fname: None
+        }
+    });
+
+    let builder_fields = fields.iter().map(|f| {
+        let fname = &f.ident;
+        let ftype = &f.ty;
+
+        quote! {
+            #fname : Option<#ftype>
+        }
+    });
+
+    let setters = fields.iter().map(|f| {
+        let fname = &f.ident;
+        let ftype = &f.ty;
+
+        quote! {
+            pub fn #fname(&mut self, #fname : #ftype) -> &mut Self{
+                self.#fname = Some(#fname);
+                self
+            }
+        }
+    });
     let expand = quote! {
         pub struct #bident {
-              executable: Option<String>,
-              args: Option<Vec<String>>,
-              env: Option<Vec<String>>,
-              current_dir: Option<String>,
+           #(#builder_fields,)*
         }
+
         impl #bident{
-            pub fn executable(&mut self, executable: String) -> &mut Self {
-                        self.executable = Some(executable);
-                        self
-            }
-            pub fn args(&mut self, args: Vec<String>) -> &mut Self {
-                        self.args = Some(args);
-                        self
-            }
-            pub fn env(&mut self, env: Vec<String>) -> &mut Self {
-                        self.env = Some(env);
-                        self
-            }
-            pub fn current_dir(&mut self, current_dir: String) -> &mut Self {
-                        self.current_dir = Some(current_dir);
-                        self
-            }
+            #(#setters)*
 
             pub fn build(&mut self) -> Result<#name, Box<dyn std::error::Error>> {
                 Ok(
                     #name
                     {
-                    executable: self.executable.clone().ok_or("should set executable")?,
-                    env: self.env.clone().ok_or("should set env")?,
-                    args: self.args.clone().ok_or("should set args")?,
-                    current_dir: self.current_dir.clone().ok_or("should set current dir")?,
+                   #(#build_fields,)*
                 }
                 )
             }
         }
+
         impl #name{
             pub fn builder() -> #bident {
                 #bident {
-                    executable: None,
-                    args: None,
-                    env: None,
-                    current_dir: None,
+                    #(#builder_init_fields,)*
                 }
             }
         }
